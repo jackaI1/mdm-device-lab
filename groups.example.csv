@@ -1,0 +1,3 @@
+group,device_ids,wifi_ssid,wifi_password,wifi_security,apps,min_password_length,require_password
+lab-phones,1;2,LabWifi,change-me-12345,WPA2,com.example.notes;com.example.mail,8,yes
+guest-tablets,3,GuestWifi,guest-pass-123,WPA2,,,no

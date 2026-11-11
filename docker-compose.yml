@@ -1,0 +1,33 @@
+# Runs the open-source Headwind MDM server and its database on your own machine.
+# Start with: docker compose up -d   Stop with: docker compose down
+# The image name is set by HMDM_IMAGE so you can pin the version Headwind publishes.
+services:
+  db:
+    image: mariadb:10.11
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-change-me-root}
+      MARIADB_DATABASE: hmdm
+      MARIADB_USER: hmdm
+      MARIADB_PASSWORD: ${DB_PASSWORD:-change-me-db}
+    volumes:
+      - hmdm-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 30
+
+  mdm:
+    image: ${HMDM_IMAGE:-hmdm/hmdm:latest}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_NAME: hmdm
+      DB_USER: hmdm
+      DB_PASSWORD: ${DB_PASSWORD:-change-me-db}
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  hmdm-db:
