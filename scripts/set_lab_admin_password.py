@@ -26,7 +26,10 @@ def main() -> int:
         print(__doc__, file=sys.stderr)
         return 2
     value = headwind_hash(sys.argv[1])
-    sql = f"UPDATE users SET password = '{value}' WHERE login = 'admin';"
+    # The seeded admin is flagged passwordReset=true, and Headwind refuses private API
+    # calls until the flag is cleared, so the new password also clears that flag.
+    sql = (f"UPDATE users SET password = '{value}', passwordReset = false, "
+           "passwordResetToken = NULL WHERE login = 'admin';")
     result = subprocess.run(
         ["docker", "compose", "exec", "-T", "postgres", "psql", "-U", "hmdm", "-d", "hmdm", "-c", sql],
         check=False, capture_output=True, text=True)
