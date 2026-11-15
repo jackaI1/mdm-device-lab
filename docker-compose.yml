@@ -1,31 +1,37 @@
-# Runs the open-source Headwind MDM server and its database on your own machine.
-# Start with: docker compose up -d   Stop with: docker compose down
-# The image name is set by HMDM_IMAGE so you can pin the version Headwind publishes.
+# Runs the open-source Headwind MDM server and its PostgreSQL database on this computer.
+# Start:  docker compose up -d      Stop:  docker compose down
+# The server is published on 127.0.0.1 only. Android emulators reach it at http://10.0.2.2:8080.
+# Default admin login is admin / admin. Change it in the admin panel after the first sign-in.
 services:
-  db:
-    image: mariadb:10.11
+  postgres:
+    image: postgres:12-alpine
     environment:
-      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-change-me-root}
-      MARIADB_DATABASE: hmdm
-      MARIADB_USER: hmdm
-      MARIADB_PASSWORD: ${DB_PASSWORD:-change-me-db}
+      POSTGRES_USER: hmdm
+      POSTGRES_PASSWORD: ${SQL_PASS:-change-me-db}
+      POSTGRES_DB: hmdm
     volumes:
-      - hmdm-db:/var/lib/mysql
+      - hmdm-db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "pg_isready -U hmdm -d hmdm"]
       interval: 5s
       retries: 30
 
-  mdm:
-    image: ${HMDM_IMAGE:-hmdm/hmdm:latest}
+  hmdm:
+    image: ${HMDM_IMAGE:-headwindmdm/hmdm:0.1.9}
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
     environment:
-      DB_HOST: db
-      DB_NAME: hmdm
-      DB_USER: hmdm
-      DB_PASSWORD: ${DB_PASSWORD:-change-me-db}
+      SQL_HOST: postgres
+      SQL_BASE: hmdm
+      SQL_USER: hmdm
+      SQL_PASS: ${SQL_PASS:-change-me-db}
+      BASE_DOMAIN: ${BASE_DOMAIN:-localhost}
+      PROTOCOL: http
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      SHARED_SECRET: ${SHARED_SECRET:-change-me-secret}
+      HMDM_VARIANT: os
+      CLIENT_VERSION: "6.40"
     ports:
       - "127.0.0.1:8080:8080"
 

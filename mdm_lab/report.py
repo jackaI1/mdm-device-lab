@@ -8,20 +8,14 @@ from pathlib import Path
 from typing import Any
 
 STALE_AFTER = timedelta(hours=24)
-FIELDS = ["device_id", "name", "enrollment_status", "last_check_in", "check_in_status"]
+FIELDS = ["device_number", "enrollment_status", "enrolled_at", "last_check_in", "check_in_status"]
 
 
-def _parse_time(value: Any) -> datetime | None:
+def _from_millis(value: Any) -> datetime | None:
+    """Headwind stores times as milliseconds since 1970. Zero or empty means "never"."""
     if value in (None, "", 0, "0"):
         return None
-    if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
-        # Servers commonly store times as milliseconds since 1970.
-        return datetime.fromtimestamp(int(value) / 1000, tz=UTC)
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return datetime.fromtimestamp(int(value) / 1000, tz=UTC)
 
 
 def build_report(devices: list[dict[str, Any]], now: datetime | None = None,
@@ -29,18 +23,18 @@ def build_report(devices: list[dict[str, Any]], now: datetime | None = None,
     now = now or datetime.now(UTC)
     rows = []
     for device in devices:
-        last = _parse_time(device.get("lastUpdate") or device.get("lastCheckIn"))
+        enrolled_at = _from_millis(device.get("enrollTime"))
+        last = _from_millis(device.get("lastUpdate"))
         if last is None:
             check_in = "never"
         elif now - last > stale_after:
             check_in = "stale"
         else:
             check_in = "ok"
-        enrolled = device.get("enrolled", True)
         rows.append({
-            "device_id": str(device.get("id", "")),
-            "name": str(device.get("number") or device.get("name") or ""),
-            "enrollment_status": "enrolled" if enrolled else "not enrolled",
+            "device_number": str(device.get("number") or ""),
+            "enrollment_status": "enrolled" if enrolled_at else "not enrolled",
+            "enrolled_at": enrolled_at.isoformat(timespec="seconds") if enrolled_at else "",
             "last_check_in": last.isoformat(timespec="seconds") if last else "",
             "check_in_status": check_in,
         })
