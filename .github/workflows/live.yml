@@ -42,6 +42,9 @@ jobs:
           docker compose logs --tail 80 hmdm
           exit 1
 
+      - name: Set the lab admin password (admin / admin)
+        run: python3 scripts/set_lab_admin_password.py admin
+
       - name: Download the Headwind launcher
         run: curl -fsSL -o "$RUNNER_TEMP/hmdm-launcher.apk" https://h-mdm.com/files/hmdm-6.40-os.apk && ls -l "$RUNNER_TEMP/hmdm-launcher.apk"
 
