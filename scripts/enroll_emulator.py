@@ -56,6 +56,7 @@ def type_text(node: ET.Element, text: str) -> None:
     tap(node)
     time.sleep(0.5)
     adb("shell", "input", "keyevent", "KEYCODE_MOVE_END")
+    adb("shell", "input", "keyevent", *["KEYCODE_DEL"] * 40)
     adb("shell", "input", "text", text.replace(" ", "%s"))
 
 
@@ -63,24 +64,25 @@ def find(nodes: list[ET.Element], id_suffix: str) -> ET.Element | None:
     return next((n for n in nodes if n.get("resource-id", "").endswith(id_suffix)), None)
 
 
-def step(nodes: list[ET.Element]) -> bool:
+def step(nodes: list[ET.Element], attempts: dict[str, int]) -> bool:
     """Do one thing on the current screen. Return False when nothing matched."""
     server_field = find(nodes, "id/server_url")
-    if server_field is not None:
+    if server_field is not None and attempts.get("server", 0) < 3:
+        attempts["server"] = attempts.get("server", 0) + 1
         type_text(server_field, SERVER)
         save = find(nodes, "id/saveServerUrl")
         if save is not None:
             tap(save)
-        print("entered server URL")
+        print(f"entered server URL (attempt {attempts['server']})")
         return True
     device_field = find(nodes, "id/device_id")
-    if device_field is not None:
+    if device_field is not None and attempts.get("device", 0) < 3:
+        attempts["device"] = attempts.get("device", 0) + 1
         type_text(device_field, NUMBER)
-        button = next((n for n in nodes if n.get("clickable") == "true"
-                       and n.get("text") in CONTINUE_LABELS), None)
-        if button is not None:
-            tap(button)
-        print(f"entered device number {NUMBER}")
+        save = find(nodes, "id/saveDeviceId")
+        if save is not None:
+            tap(save)
+        print(f"entered device number {NUMBER} (attempt {attempts['device']})")
         return True
     for node in nodes:
         if node.get("clickable") == "true" and node.get("text") in CONTINUE_LABELS:
@@ -90,13 +92,19 @@ def step(nodes: list[ET.Element]) -> bool:
     return False
 
 
+def describe_screen(nodes: list[ET.Element]) -> str:
+    ids = sorted({n.get("resource-id", "") for n in nodes if n.get("resource-id")})
+    texts = sorted({n.get("text", "") for n in nodes if n.get("text")})
+    return f"resource-ids: {ids[:25]}\ntexts: {texts[:25]}"
+
+
 def main() -> int:
     global SERVER, NUMBER
     parser = argparse.ArgumentParser()
     parser.add_argument("--apk", required=True)
     parser.add_argument("--server", required=True)
     parser.add_argument("--number", required=True)
-    parser.add_argument("--timeout", type=int, default=900)
+    parser.add_argument("--timeout", type=int, default=600)
     args = parser.parse_args()
     SERVER, NUMBER = args.server, args.number
 
@@ -104,11 +112,14 @@ def main() -> int:
     print(adb("shell", "dpm", "set-device-owner", ADMIN_RECEIVER, check=False).strip())
     adb("shell", "monkey", "-p", PACKAGE, "-c", "android.intent.category.LAUNCHER", "1", check=False)
 
+    attempts: dict[str, int] = {}
     deadline = time.time() + args.timeout
     quiet_rounds = 0
+    nodes: list[ET.Element] = []
     while time.time() < deadline:
         time.sleep(3)
-        if step(screen_nodes()):
+        nodes = screen_nodes()
+        if step(nodes, attempts):
             quiet_rounds = 0
             continue
         quiet_rounds += 1
@@ -117,6 +128,7 @@ def main() -> int:
             print("no more setup dialogs; leaving the launcher to check in")
             return 0
     print("timed out waiting for the launcher setup dialogs", file=sys.stderr)
+    print(describe_screen(nodes), file=sys.stderr)
     return 1
 
 
