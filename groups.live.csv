@@ -1,0 +1,2 @@
+group,device_numbers,wifi_ssid,wifi_password,wifi_security,apps,password_mode
+ci-lab,pixel-01,LabWifi,change-me-12345,WPA2,,

@@ -1,0 +1,88 @@
+# A real end-to-end run: the open-source Headwind MDM server in Docker, one Android emulator
+# enrolled with the Headwind launcher, then the CLI pushes, locks and reports against it.
+# It runs on GitHub's Linux runners because they have KVM (hardware virtualization) for the emulator.
+name: Live check
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -e ".[dev]"
+
+      - name: Allow KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Start Headwind MDM and PostgreSQL
+        run: docker compose up -d --wait
+
+      - name: Wait for the Headwind REST API
+        run: |
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+              -d '{"login":"admin","password":"x"}' http://127.0.0.1:8080/rest/public/jwt/login || true)
+            if [ "$code" = "401" ] || [ "$code" = "200" ]; then echo "server answered HTTP $code"; exit 0; fi
+            sleep 10
+          done
+          docker compose logs --tail 80 hmdm
+          exit 1
+
+      - name: Download the Headwind launcher
+        run: curl -fsSL -o "$RUNNER_TEMP/hmdm-launcher.apk" https://h-mdm.com/files/hmdm-6.40-os.apk && ls -l "$RUNNER_TEMP/hmdm-launcher.apk"
+
+      - name: Boot an emulator and enroll it
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel
+          disable-animations: true
+          emulator-boot-timeout: 1200
+          script: python3 scripts/enroll_emulator.py --apk "$RUNNER_TEMP/hmdm-launcher.apk" --server http://10.0.2.2:8080 --number pixel-01
+
+      - name: Push, lock and report against the live server
+        env:
+          HMDM_URL: http://127.0.0.1:8080
+          HMDM_LOGIN: admin
+          HMDM_PASSWORD: admin
+        run: |
+          set +e
+          echo "== wait for pixel-01 to appear on the server"
+          for i in $(seq 1 60); do
+            python -m mdm_lab report --out live-report.csv >/dev/null 2>&1 && grep -q pixel-01 live-report.csv && break
+            sleep 15
+          done
+          echo "== report (before push)"; python -m mdm_lab report --out live-report.csv
+          echo "== push dry run"; python -m mdm_lab push groups.live.csv
+          echo "== push --apply"; python -m mdm_lab push groups.live.csv --apply; echo "push exit code $?"
+          echo "== lock pixel-01"; python -m mdm_lab lock pixel-01; echo "lock exit code $?"
+          echo "== report (after push)"; python -m mdm_lab report --out live-report.csv; echo "report exit code $?"
+          cat live-report.csv
+
+      - name: Show Headwind logs on failure
+        if: failure()
+        run: docker compose logs --tail 120 hmdm
+
+      - name: Upload the live run output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-run
+          path: live-report.csv
+          if-no-files-found: ignore

@@ -2,6 +2,7 @@
 
 Connection settings come from environment variables so passwords never sit in a file:
   HMDM_URL, HMDM_LOGIN, HMDM_PASSWORD
+Devices are named by their Headwind "number" (the name the device was enrolled with).
 """
 
 from __future__ import annotations
@@ -10,10 +11,11 @@ import argparse
 import os
 import sys
 from datetime import UTC, datetime
+from typing import Any
 
 from .client import MdmClient, MdmError
 from .groups import GroupsError, load_groups
-from .policy import build_policy
+from .policy import PolicyError, build_configuration, configuration_name, describe
 from .report import build_report, to_markdown, write_csv
 
 
@@ -26,30 +28,49 @@ def _client(args: argparse.Namespace) -> MdmClient:
     return MdmClient(url, login, password)
 
 
+def _device_by_number(client: MdmClient, number: str) -> dict[str, Any]:
+    for device in client.list_devices():
+        if str(device.get("number")) == number:
+            return device
+    raise MdmError(f"no enrolled device with number {number!r} on this server")
+
+
 def cmd_push(args: argparse.Namespace) -> int:
     groups = load_groups(args.groups_csv)
     if not args.apply:
         print("DRY RUN (add --apply to send). Nothing has been changed.")
-    client = _client(args) if args.apply else None
-    known = {str(d.get("id")) for d in client.list_devices()} if client else None
+        for group in groups:
+            print(f"group {group.name}: {len(group.device_numbers)} device(s)")
+            for line in describe(group):
+                print(f"  {line}")
+            for number in group.device_numbers:
+                print(f"  would assign {number} to {configuration_name(group)}")
+        return 0
+
+    client = _client(args)
+    devices = {str(d.get("number")): d for d in client.list_devices()}
+    apps = client.list_applications()
     failures = 0
     for group in groups:
-        policy = build_policy(group)
-        print(f"group {group.name}: {len(group.device_ids)} device(s), policy keys {sorted(policy)}")
-        for device_id in group.device_ids:
-            if args.apply:
-                if device_id not in known:
-                    print(f"  skip {device_id}: not enrolled on this server")
-                    failures += 1
-                    continue
-                try:
-                    client.apply_policy(device_id, policy)
-                    print(f"  sent to {device_id}")
-                except MdmError as exc:
-                    print(f"  FAILED {device_id}: {exc}")
-                    failures += 1
+        print(f"group {group.name}: {len(group.device_numbers)} device(s)")
+        ids: list[int] = []
+        for number in group.device_numbers:
+            if number not in devices:
+                print(f"  skip {number}: not enrolled on this server")
+                failures += 1
             else:
-                print(f"  would send to {device_id}")
+                ids.append(int(devices[number]["id"]))
+        if not ids:
+            continue
+        try:
+            current = client.find_configuration(configuration_name(group))
+            saved = client.save_configuration(build_configuration(group, current, apps))
+            client.assign_devices(ids, int(saved["id"]))
+        except (MdmError, PolicyError) as exc:
+            print(f"  FAILED group {group.name}: {exc}")
+            failures += 1
+            continue
+        print(f"  assigned {len(ids)} device(s) to configuration {saved['id']} ({configuration_name(group)})")
     return 1 if failures else 0
 
 
@@ -57,8 +78,10 @@ def cmd_command(args: argparse.Namespace) -> int:
     if args.command == "wipe" and not args.yes:
         print("wipe erases the whole device. Re-run with --yes to confirm.", file=sys.stderr)
         return 2
-    _client(args).send_command(args.device_id, args.command)
-    print(f"{args.command} sent to {args.device_id}")
+    client = _client(args)
+    device = _device_by_number(client, args.device_number)
+    client.send_command(int(device["id"]), args.command)
+    print(f"{args.command} sent to {args.device_number}")
     return 0
 
 
@@ -75,14 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command_name", required=True)
 
-    push = sub.add_parser("push", help="send each group's policy to its devices")
+    push = sub.add_parser("push", help="send each group's settings to its devices")
     push.add_argument("groups_csv")
     push.add_argument("--apply", action="store_true", help="actually send (default is a dry run)")
     push.set_defaults(func=cmd_push)
 
     for name in ("lock", "wipe"):
         p = sub.add_parser(name, help=f"{name} one device remotely")
-        p.add_argument("device_id")
+        p.add_argument("device_number")
         if name == "wipe":
             p.add_argument("--yes", action="store_true", help="required to confirm a wipe")
         p.set_defaults(func=cmd_command, command=name)
@@ -100,6 +123,6 @@ def main(argv: list[str] | None = None) -> int:
     except GroupsError as exc:
         print("CSV problems:\n" + str(exc), file=sys.stderr)
         return 2
-    except MdmError as exc:
+    except (MdmError, PolicyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

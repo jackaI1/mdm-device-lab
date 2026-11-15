@@ -6,10 +6,11 @@ import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 
-REQUIRED_COLUMNS = ["group", "device_ids"]
-OPTIONAL_COLUMNS = ["wifi_ssid", "wifi_password", "wifi_security",
-                    "apps", "min_password_length", "require_password"]
+REQUIRED_COLUMNS = ["group", "device_numbers"]
+OPTIONAL_COLUMNS = ["wifi_ssid", "wifi_password", "wifi_security", "apps", "password_mode"]
 WIFI_SECURITY = {"NONE", "WPA2", "WPA3"}
+# Headwind's own password quality levels, from its Android launcher's settings.
+PASSWORD_MODES = {"", "present", "easy", "moderate", "strong"}
 
 
 class GroupsError(ValueError):
@@ -23,14 +24,13 @@ class GroupsError(ValueError):
 @dataclass
 class DeviceGroup:
     name: str
-    device_ids: list[str]
+    device_numbers: list[str]
     line: int
     wifi_ssid: str = ""
     wifi_password: str = ""
     wifi_security: str = "WPA2"
     apps: list[str] = field(default_factory=list)
-    min_password_length: int | None = None
-    require_password: bool = False
+    password_mode: str = ""
 
 
 def _split(value: str) -> list[str]:
@@ -51,44 +51,36 @@ def load_groups(path: str | Path) -> list[DeviceGroup]:
             line = reader.line_num
             row = {k: (v or "").strip() for k, v in row.items() if k}
             name = row.get("group", "")
-            ids = _split(row.get("device_ids", ""))
+            numbers = _split(row.get("device_numbers", ""))
             if not name:
                 problems.append(f"line {line}: group name is empty")
             elif name in seen_names:
                 problems.append(f"line {line}: group {name!r} appears twice")
             seen_names.add(name)
-            if not ids:
-                problems.append(f"line {line}: group {name!r} has no device_ids")
+            if not numbers:
+                problems.append(f"line {line}: group {name!r} has no device_numbers")
 
             security = (row.get("wifi_security") or "WPA2").upper()
             if security not in WIFI_SECURITY:
                 problems.append(f"line {line}: wifi_security must be one of {sorted(WIFI_SECURITY)}")
 
-            min_len: int | None = None
-            raw_min = row.get("min_password_length", "")
-            if raw_min:
-                if raw_min.isdigit() and 1 <= int(raw_min) <= 16:
-                    min_len = int(raw_min)
-                else:
-                    problems.append(f"line {line}: min_password_length must be 1-16")
-
-            require = (row.get("require_password") or "no").lower()
-            if require not in {"yes", "no"}:
-                problems.append(f"line {line}: require_password must be yes or no")
+            mode = (row.get("password_mode") or "").lower()
+            if mode not in PASSWORD_MODES:
+                problems.append(f"line {line}: password_mode must be blank or one of "
+                                f"{sorted(PASSWORD_MODES - {''})}")
 
             if row.get("wifi_ssid") and not row.get("wifi_password") and security != "NONE":
                 problems.append(f"line {line}: wifi_ssid needs a wifi_password (or wifi_security NONE)")
 
             groups.append(DeviceGroup(
                 name=name,
-                device_ids=ids,
+                device_numbers=numbers,
                 line=line,
                 wifi_ssid=row.get("wifi_ssid", ""),
                 wifi_password=row.get("wifi_password", ""),
                 wifi_security=security,
                 apps=_split(row.get("apps", "")),
-                min_password_length=min_len,
-                require_password=require == "yes",
+                password_mode=mode,
             ))
 
     if problems:
